@@ -1,0 +1,178 @@
+######################################################
+
+From: https://en.wikipedia.org/wiki/Video_Graphics_Array
+
+VGA mode                    640x480 @ 60 Hz
+
+Horizontal timings
+-------------------
+Pixel clock frequency       25.175 MHz
+Horizontal frequency	    31.469 kHz
+Horizontal pixels           640
+Horizontal sync polarity    Negative
+Total time for each line    31.778 µs
+Front porch (A)             0.636 µs
+Sync pulse length (B)       3.813 µs
+Back porch (C)             1.907 µs
+Active video (D)           25.422 µs
+
+Total horizontal sync and blanking time = 6.356 µs;  equivalent to pixel widths of A=16, B=96, C=48, D=640 and each complete line=800
+
+Vertical timings
+---------------------
+
+Vertical lines             480	
+Vertical sync polarity     Negative	
+Vertical frequency         59.94 Hz
+Total time for each frame  16.683 ms
+Front porch (A)            0.318 ms
+Sync pulse length (B)      0.064 ms
+Back porch (C)             1.048 ms
+Active video (D)           15.253 ms
+
+Total vertical sync and blanking time 1.43 ms; equivalent to line periods of A=10, B=2, C=33, D=480 and each complete frame=525
+
+######################################################
+
+All of the numbers for the horizontal is nicely dividable by 8, and the width of each character is also 8 pixels. So by dividing all figures for the horizontal by 8 we can then look at all the timings as "character-units".
+
+Active video:   640/8 = 80 
+Front Porch:     16/8 = 2
+H-Sync:          96/8 = 12
+Back Porch:      48/8 = 6
+
+This adds up to 100 character-units until the horizontal counter needs to be reset. To be able to count up to (at least) 100 we need 7 bits.
+
+Making a list of what needs to happen at each character-unit will make it easier to figure out the required logic. The bit numbers are from 0 to 6 and I've added one more "bit" for the current state of the blanking output since it can be used as a part of the combinatorial logic to reduce the number of signals we need to look at.
+
+I start with the 80 active video units and then follow that by the front porch, sync and finally the back porch.  Normally this should come in another order, but since it's a continous stream of ABCDABCDABCD it really doesn't matter where the sequence start as long as they are in the same internal order and not scrambled. It's so much easier to have the counter start at 0 for the first character when addressing the video ram later on in the design.
+
+     B 654 3210  <-- Bit number
+---------------------------------------
+#0   - 000 0000  Video character unit
+#1   - 000 0001  Video character unit
+     . ... ....  .......................
+#78  - 100 1110  Video character unit
+#79  - 100 1111  Video character unit
+
+#80  B 101 0000  Front porch (blanking active)
+#81  B 101 0001  Front porch (blanking active)
+
+#82  B 101 0010  HSync (blanking active)  hsync-set
+#83  B 101 0011  HSync (blanking active)  hsync-set
+#84  B 101 0100  HSync (blanking active) 
+#85  B 101 0101  HSync (blanking active) 
+#86  B 101 0110  HSync (blanking active)  
+#87  B 101 0111  HSync (blanking active)  
+#88  B 101 1000  HSync (blanking active) 
+#89  B 101 1001  HSync (blanking active) 
+#90  B 101 1010  HSync (blanking active)  
+#91  B 101 1011  HSync (blanking active)  
+#92  B 101 1100  HSync (blanking active) 
+#93  B 101 1101  HSync (blanking active) 
+
+#94  B 101 1110  Back porch (blanking active) #94 hsync-clr 
+#95  B 101 1111  Back porch (blanking active) #95 hsync-clr
+#96  B 110 0000  Back porch (blanking active) #96
+#97  B 110 0001  Back porch (blanking active) #97
+#98  B 110 0010  Back porch (blanking active) #98 
+#99  B 110 0011  Back porch (blanking active) #99 
+
+    - 110 0100 Reset to 000 0000 
+
+* Set blanking
+Looking at the bit patterns it's easy to see that the front porch (and the blanking) should start at #80 when both bit 4 and 6 is set for the first time. So we use that for triggering a S/R flipflop that is outputting the horizontal blanking. 
+
+In the logisim simulation gate C2 detects when both bit 4 and 6 is active and then sets the S/R flipflop made out of gates B3 and B4.
+
+* Set Hsync
+The next thing that should happen is to activate the HSYNC at #82. Looking in table it seems like that the first time both the B(lanking) and bit 1 is set and we can trigger the S/R flipflop using that.
+
+But that would not only activate it at #82 (and #83), but also at #86/87, #90/91, #94/95 and #98/99 as well which is not what we want. in particular, at #94 we need to clear the S/R flipflop, but if the Set input is asserted at the same time as the Reset input it will start to oscillate. Not good at all.
+
+To make it not activate at improper times we need to also check that bit 3 is not set (this takes makes it not activate at the same time as the resetting of the flipflop at #94/95), but we also need to check bit 4 or else it will retrigger at #98/#99.
+
+The 4-input NAND gate A1 together with a 2-input NAND D3 (used just as an inverter) does the decoding of the counter bits and sets the S/R flipflop made out of gates B3 and B4.
+
+* Clear Hsync
+The Hsync should be cleared at #94.
+
+So to summarize the conditions for the horizontal.
+
+4 & 6                     = Set blanking
+blanking & 1 & !3 & 4     = Set HSync
+blanking & 1 & 2 & 3      = Clear Hsync
+blanking & 2 & 5          = Clear blanking, Reset counter 
+
+------------------------
+
+video: 480 
+Front porch: 10 
+Vsync: 2 
+Front porch: 33
+
+B 98 7654 3210  <-- Bit number
+---------------------------------------
+- 00 0000 0000   Video Row #0
+- 00 0000 0001   Video Row #1
+- 00 0000 0010   Video Row #2
+- 01 1101 1101   Video Row #477
+- 01 1101 1110   Video Row #478
+- 01 1101 1111   Video Row #479
+
+B 01 1110 0000   Front porch 0 (blanking !vbset) #480
+B 01 1110 0001   Front porch 1 (blanking !vbset) #481
+B 01 1110 0010   Front porch 2 (blanking !vbset) #482
+B 01 1110 0011   Front porch 3 (blanking !vbset) #483
+B 01 1110 0100   Front porch 4 (blanking !vbset) #484
+B 01 1110 0101   Front porch 5 (blanking !vbset) #485
+B 01 1110 0110   Front porch 6 (blanking !vbset) #486
+B 01 1110 0111   Front porch 7 (blanking !vbset) #487
+B 01 1110 1000   Front porch 8 (blanking !vbset) #488
+B 01 1110 1001   Front porch 9 (blanking !vbset) #489
+
+B 01 1110 1010   Vsync 0 (blanking !vbset)  #490
+B 01 1110 1011   Vsync 1 (blanking !vbset)  #491
+
+B 01 1110 1100   Back porch 0 (blanking !vbset) #492
+B 01 1110 1101   Back porch 1 (blanking !vbset) #493
+B 01 1110 1110   Back porch 2 (blanking !vbset) #494
+B 01 1110 1111   Back porch 3 (blanking !vbset) #495
+B 01 1111 0000   Back porch 4 (blanking !vbset) #496
+B 01 1111 0001   Back porch 5 (blanking !vbset) #497
+B 01 1111 0010   Back porch 6 (blanking !vbset) #498
+B 01 1111 0011   Back porch 7 (blanking !vbset) #499
+B 01 1111 0100   Back porch 8 (blanking !vbset) #500
+B 01 1111 0101   Back porch 9 (blanking !vbset) #501
+B 01 1111 0110   Back porch 10 (blanking !vbset) #502
+B 01 1111 0111   Back porch 11 (blanking !vbset) #503
+B 01 1111 1000   Back porch 12 (blanking !vbset) #504
+B 01 1111 1001   Back porch 13 (blanking !vbset) #505
+B 01 1111 1010   Back porch 14 (blanking !vbset) #506
+B 01 1111 1011   Back porch 15 (blanking !vbset) #507
+B 01 1111 1100   Back porch 16 (blanking !vbset) #508
+B 01 1111 1101   Back porch 17 (blanking !vbset) #509
+B 01 1111 1110   Back porch 18 (blanking !vbset) #510
+B 01 1111 1111   Back porch 19 (blanking !vbset) #511
+B 10 0000 0000   Back porch 20 (blanking) #512
+B 10 0000 0001   Back porch 21 (blanking) #513
+B 10 0000 0010   Back porch 22 (blanking) #514
+B 10 0000 0011   Back porch 23 (blanking) #515
+B 10 0000 0100   Back porch 24 (blanking) #516
+B 10 0000 0101   Back porch 25 (blanking) #517
+B 10 0000 0110   Back porch 26 (blanking) #518
+B 10 0000 0111   Back porch 27 (blanking) #519
+B 10 0000 1000   Back porch 28 (blanking) #520
+B 10 0000 1001   Back porch 29 (blanking) #521
+B 10 0000 1010   Back porch 30 (blanking) #522
+B 10 0000 1011   Back porch 31 (blanking) #523
+B 10 0000 1100   Back porch 32 (blanking) #524
+
+- 10 0000 1101 Reset to 00 0000 00
+
+8 & 7 & 6 & 5 = Set blanking
+BL & 3 & 1 = Set Vsync
+9 & 3 & 2 & 0 = Clear blanking
+
+VSYNC !VBSET & !4 & 3 & !2 & 1
+    x xx xxx0 101x
